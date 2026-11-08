@@ -10,6 +10,7 @@ resource "google_project_service" "apis" {
     "iam.googleapis.com",
     "pubsub.googleapis.com",
     "cloudresourcemanager.googleapis.com",
+    "cloudbuild.googleapis.com",
   ])
 
   service            = each.value
