@@ -331,21 +331,21 @@ flowchart LR
 
 ### Fase 6: Reto de la semana (Idempotencia y mensajes muertos)
 
-- Inventario cuadrando exactamente tras inyectar `PROBABILIDAD_FALLO = 0.5` en la cocina idempotente: cada pedido descuenta exactamente una vez independientemente de las reentregas de Pub/Sub.
+- Registros de Cloud Run (`grupo3-cocina`) mostrando los reintentos controlados con número de intento explícito (del 1 al 5) ante el fallo deliberado del plato misterioso:
 
-*(Pendiente adjuntar captura: `evidence/fase6-inventario-cuadra.png`)*
+![Intentos de entrega numerados](evidence/fase6-intentos-dead-run.png)
 
-- Mensaje del plato misterioso descartado tras 5 intentos y leído desde la suscripción del tema de mensajes muertos (`grupo3-pedidos-muertos`):
+- Mensaje del pedido con el plato misterioso extraído exitosamente de la cola de mensajes muertos (`grupo3-pedidos-muertos`) tras agotarse los 5 intentos:
 
-*(Pendiente adjuntar captura: `evidence/fase6-mensaje-muerto.png`)*
+![Mensaje leído desde suscripción de muertos](evidence/fase6-pub-sub-dead-letter.png)
 
-- Registros de la cocina mostrando el campo `intento de entrega` con número secuencial (1 al 5) en lugar de "desconocido":
+- Estado del pedido en la pantalla tras la falla repetida:
 
-*(Pendiente adjuntar captura: `evidence/fase6-intento-entrega.png`)*
+![Pedido retenido en pantalla](evidence/fase6-preparando.png)
 
-- Tabla de mediciones de concurrencia y costos de Firestore.
+- Inventario cuadrando con precisión (16 tintos restantes tras 4 pedidos completados) gracias al control transaccional e idempotente en Firestore:
 
-*(Completada en la sección de decisiones)*
+![Inventario cuadrando exactamente](evidence/fase6-tintos-total.png)
 
 ## Decisiones del reto
 
