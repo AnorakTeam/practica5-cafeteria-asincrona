@@ -203,7 +203,49 @@ Frontend:
 
 ## Evidencias por fase
 
-<!-- Una subsección por cada fase de la guía, con capturas o salidas de comandos y unas líneas de lo que observaste. -->
+### Fase 0: Preparación
+
+- Configuración activa de GCP `gcloud config list`:
+
+![Configuración gcloud](evidence/fase0-gcloud-config.png)
+
+- Repositorio del grupo con colaboradores agregados:
+
+
+
+### Fase 1: Registro, imágenes y la base
+
+- Las tres imágenes (`backend:v1`, `frontend:v1`, `cocina:v1`) compiladas y subidas a Artifact Registry:
+
+![Imágenes en Artifact Registry](evidence/fase1-docker-images.png)
+
+- Pedido realizado desde la web del frontend quedando en estado `recibido` de forma indefinida:
+
+![Pedido en recibido](evidence/fase1-page.png)
+
+- Advertencia (`WARNING`) en los registros de Cloud Run del backend indicando que la variable `TEMA` no está configurada:
+
+![Advertencia en logs del backend](evidence/fase1-log.png)
+
+### Fase 2: El tema
+
+*(Pendiente)*
+
+### Fase 3: La cocina privada
+
+*(Pendiente)*
+
+### Fase 4: Lo asíncrono, visto
+
+*(Pendiente)*
+
+### Fase 5: Una falla a propósito
+
+*(Pendiente)*
+
+### Fase 6: Reto de la semana (Idempotencia y mensajes muertos)
+
+*(Pendiente)*
 
 ## Decisiones del reto
 
