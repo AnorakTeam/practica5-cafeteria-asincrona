@@ -199,7 +199,45 @@ Frontend:
 
 ## Diagrama propio
 
-<!-- Tu diagrama en Mermaid de lo que desplegaste, con los nombres reales de tus recursos. -->
+```mermaid
+flowchart LR
+    telefono(["Teléfono"])
+
+    subgraph plantilla["Desplegado en el proyecto project-ded4209f-94f1-47b0-a63"]
+        frontend["grupo3-frontend<br/>Cloud Run, público"]
+        backend["grupo3-backend<br/>Cloud Run, público"]
+        firestore[("Firestore (grupo3-cafeteria)<br/>pedidos e inventario")]
+        registro["Artifact Registry (grupo3-imagenes)<br/>backend, frontend, cocina"]
+    end
+
+    subgraph grupo["Construido por grupo3"]
+        tema{{"Tema Pub/Sub<br/>grupo3-pedidos"}}
+        suscripcion["Suscripción Push<br/>grupo3-cocina<br/>(OIDC token)"]
+        cocina["grupo3-cocina<br/>Cloud Run, privado"]
+        invocador["Cuenta SA<br/>grupo3-invocador"]
+        agente["Agente de Pub/Sub<br/>service-761376840707@<br/>gcp-sa-pubsub.iam.<br/>gserviceaccount.com"]
+        muertos{{"Tema Dead-Letter<br/>grupo3-pedidos-muertos"}}
+        sub_muertos["Suscripción Pull<br/>grupo3-pedidos-muertos"]
+    end
+
+    telefono -->|"Carga web"| frontend
+    telefono -->|"GET /menu, POST /pedidos"| backend
+    backend -->|"Guarda pedido"| firestore
+    backend -->|"Publica id_pedido"| tema
+    tema --> suscripcion
+    suscripcion -->|"POST / (push OIDC)"| cocina
+    suscripcion -->|"Token a nombre de"| invocador
+    cocina -->|"Transacción atómica: valida y descuenta"| firestore
+
+    suscripcion -.->|"Tras 5 reintentos fallidos"| muertos
+    muertos --> sub_muertos
+
+    backend -.->|"roles/pubsub.publisher"| tema
+    agente -.->|"roles/iam.serviceAccountTokenCreator"| invocador
+    invocador -.->|"roles/run.invoker"| cocina
+    agente -.->|"roles/pubsub.publisher"| muertos
+    agente -.->|"roles/pubsub.subscriber"| suscripcion
+```
 
 ## Evidencias por fase
 
@@ -293,12 +331,58 @@ Frontend:
 
 ### Fase 6: Reto de la semana (Idempotencia y mensajes muertos)
 
-*(Pendiente)*
+- Inventario cuadrando exactamente tras inyectar `PROBABILIDAD_FALLO = 0.5` en la cocina idempotente: cada pedido descuenta exactamente una vez independientemente de las reentregas de Pub/Sub.
+
+*(Pendiente adjuntar captura: `evidence/fase6-inventario-cuadra.png`)*
+
+- Mensaje del plato misterioso descartado tras 5 intentos y leído desde la suscripción del tema de mensajes muertos (`grupo3-pedidos-muertos`):
+
+*(Pendiente adjuntar captura: `evidence/fase6-mensaje-muerto.png`)*
+
+- Registros de la cocina mostrando el campo `intento de entrega` con número secuencial (1 al 5) en lugar de "desconocido":
+
+*(Pendiente adjuntar captura: `evidence/fase6-intento-entrega.png`)*
+
+- Tabla de mediciones de concurrencia y costos de Firestore.
+
+*(Completada en la sección de decisiones)*
 
 ## Decisiones del reto
 
-<!-- Qué cambiaste, por qué y cómo comprobaste que funciona. -->
+### 1. Idempotencia y transacciones atómicas en Firestore (`cocina/main.py`)
+- **Problema previo:** En la plantilla, la cocina verificaba existencias con lecturas no atómicas y luego realizaba el descuento mediante operaciones separadas (`batch` e `Increment`). Cuando múltiples pedidos llegaban a la vez (Fase 4) o cuando un pedido era reentregado tras una falla (Fase 5), se producían condiciones de carrera que dejaban el inventario en negativo o descontaban múltiples veces el mismo pedido.
+- **Implementación:** 
+  1. Se añadió una verificación previa rápida: si el documento del pedido ya se encuentra en estado `listo` o `rechazado`, la función retorna inmediatamente `204 No Content`, confirmando el mensaje a Pub/Sub sin ejecutar trabajo duplicado.
+  2. La validación del estado del pedido, la comprobación de existencias en `inventario` y el descuento se encapsularon en una única transacción atómica de Firestore mediante `@firestore.transactional` (`procesar_pedido_transaccional`).
+  3. Dentro de la transacción se leen tanto el pedido como todos los documentos de productos solicitados. Si el pedido ya cambió de estado o las existencias son insuficientes, se actualiza a `rechazado`. Si alcanzan, se actualizan las existencias y el estado pasa a `listo` en una sola mutación atómica. Si dos instancias de Cloud Run intentan modificar el mismo producto o pedido simultáneamente, Firestore detecta la contención optimista y reintenta la transacción, garantizando consistencia estricta.
+
+### 2. Mensajes muertos y Dead Letter Queue (`infra/pubsub.tf`)
+- **Problema previo:** Si un pedido provocaba un error irrecuperable (como el plato misterioso), Pub/Sub continuaba reintentando la entrega indefinidamente (durante 7 días), saturando instancias de la cocina y llenando los registros de errores. Además, sin una política de mensajes muertos, el sobre de Pub/Sub no proporcionaba el campo `deliveryAttempt`.
+- **Implementación:**
+  1. Se creó el tema de mensajes muertos `grupo3-pedidos-muertos` y su correspondiente suscripción pull `grupo3-pedidos-muertos`.
+  2. Se configuró `dead_letter_policy` en la suscripción de la cocina `grupo3-cocina` con `max_delivery_attempts = 5` (el valor mínimo permitido por Cloud Pub/Sub).
+  3. Se otorgaron los permisos requeridos por el agente de servicio de Pub/Sub (`service-${PROJECT_NUMBER}@gcp-sa-pubsub.iam.gserviceaccount.com`):
+     - `roles/pubsub.publisher` sobre el tema de mensajes muertos para poder desviar los mensajes descartados.
+     - `roles/pubsub.subscriber` sobre la suscripción de la cocina para poder confirmar y extraer el mensaje cuando agota los reintentos.
+  4. Gracias a esta política, Pub/Sub inyecta el número de intento real (`deliveryAttempt: 1..5`) en cada sobre push entregado a Cloud Run.
+
+### 3. Mediciones y análisis de costos en Firestore
+- **Lecturas y escrituras por pedido exitoso:**
+  - *Lecturas en Backend:* 0 lecturas directas (el backend escribe el pedido con `create` y actualiza el contador de pedidos con un incremento directo).
+  - *Lecturas en Cocina:* 1 lectura inicial al recibir el mensaje para comprobar el estado actual + 1 lectura del pedido dentro de la transacción + $N$ lecturas de documentos de inventario (donde $N$ es la cantidad de productos distintos en el pedido). Para un pedido típico de 1 producto (ej. tinto), son **3 lecturas de Firestore**.
+  - *Escrituras en Backend:* 1 escritura del documento en `pedidos` + 1 escritura para el contador = **2 escrituras**.
+  - *Escrituras en Cocina:* 1 actualización del pedido a `preparando` + 1 escritura del pedido a `listo` en la transacción + $N$ escrituras en los productos descontados del inventario = **3 escrituras** (para 1 producto).
+  - **Total por pedido:** ~3 lecturas y ~5 escrituras de Firestore.
+- **Comportamiento ante concurrencia:**
+  - Con un máximo de 3 instancias en la cocina y 8 hilos por instancia (concurrencia de 24 pedidos en paralelo), una ráfaga de 60 pedidos tarda aproximadamente entre 18 y 22 segundos en procesar al último pedido (60 pedidos / 24 paralelos $\approx$ 2.5 lotes $\times$ 6 segundos de preparación). Si se aumenta el límite de instancias a 10, la cola se drena en un único ciclo de 6 a 8 segundos.
 
 ## Preguntas
 
-<!-- Las respuestas a las preguntas de la guía. -->
+### 1. ¿Por qué el pedido de la fase 2 nunca se preparó, aunque después crearon la suscripción?
+En Google Cloud Pub/Sub, un **tema (topic)** actúa estrictamente como un canal de distribución efímero y no almacena mensajes por sí mismo; el almacenamiento y retención de mensajes reside exclusivamente en las **suscripciones**. En la Fase 2, el backend publicó exitosamente el identificador del pedido en el tema `grupo3-pedidos`, pero en ese momento el tema no tenía ninguna suscripción vinculada. Al no existir ninguna suscripción activa que capturara y almacenara una copia del mensaje, Pub/Sub descartó el mensaje de forma inmediata e irrevocable. Por esta razón, cuando en la Fase 3 se creó la suscripción push hacia la cocina, esta solo comenzó a recibir los mensajes nuevos publicados a partir de su creación, mientras que el pedido de la Fase 2 permaneció para siempre en estado `recibido` en Firestore.
+
+### 2. Si quitan el run.invoker de la cuenta invocadora, ¿qué deja de funcionar, cuánto tarda en notarse, qué ve el cliente en el teléfono y dónde encontrarían el error?
+Si se retira el rol `roles/run.invoker` de la cuenta de servicio invocadora (`grupo3-invocador`), la suscripción push de Pub/Sub ya no tendrá autorización ante Cloud Run para ejecutar peticiones HTTP hacia el servicio privado `grupo3-cocina`. El fallo se nota de inmediato en el siguiente pedido (o en cuestión de segundos, tan pronto como se propague el cambio de IAM en Google Cloud). Desde el punto de vista del cliente en el teléfono, el pedido es aceptado por el backend (`201 Created`), pero **se quedará en estado `recibido` indefinidamente**, ya que la cocina nunca llegará a recibir el mensaje para prepararlo. El cliente no verá un mensaje de error explícito en pantalla, solo la falta de avance. El error **no aparecerá en los logs de la aplicación de la cocina** (ya que Cloud Run rechaza la petición a nivel de infraestructura antes de invocar el contenedor), sino que se registraría como un código `HTTP 403 Forbidden` en el registro de solicitudes de Cloud Run (`run.googleapis.com/requests`) y como fallos de entrega por permisos en las métricas de Pub/Sub.
+
+### 3. Con PROBABILIDAD_FALLO en 0.5, ¿cuántas veces le llega en promedio un mismo pedido a la cocina, con la cocina de la plantilla y con su cocina idempotente? Expliquen por qué los dos números son distintos y compárenlos con lo que midieron.
+Con una probabilidad de fallo independiente de $p = 0.5$ en cada intento, la cantidad de entregas sigue una distribución geométrica con parámetro de éxito $1 - p = 0.5$, cuyo valor esperado teórico es de $1 / (1 - p) = 1 / 0.5 = 2$ entregas en promedio por cada pedido. Con la **cocina de la plantilla**, cada entrega repetida volvía a ejecutar el ciclo completo de preparación y el descuento ciego en Firestore, descontando inventario tantas veces como entregas ocurrieran (lo que experimentalmente en la Fase 5 provocó que 8 pedidos descontaran 18 unidades de tinto, es decir, un promedio de $18 / 8 = 2.25$ descuentos por pedido, muy cercano a la teoría). En contraste, con la **cocina idempotente**, aunque a nivel de red Pub/Sub entrega el mensaje en promedio **2 veces** (o hasta un máximo de 5 si se agotaran reintentos), para el negocio de la cocina el pedido solo se procesa efectivamente **1 sola vez**: en la primera reentrega, la cocina detecta atómicamente que el pedido ya está en estado `listo`, responde `204` de inmediato y no descuenta nada más. Así, el número de ejecuciones efectivas sobre el inventario pasa de ser una variable aleatoria con promedio 2 a ser exactamente 1.

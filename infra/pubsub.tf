@@ -88,6 +88,34 @@ resource "google_service_account_iam_member" "pubsub_firma_tokens" {
   depends_on = [google_pubsub_topic.pedidos]
 }
 
+# ---------- Mensajes Muertos (Dead Letter Queue) ----------
+
+resource "google_pubsub_topic" "muertos" {
+  name = "${var.prefijo}-pedidos-muertos"
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_pubsub_subscription" "muertos" {
+  name  = "${var.prefijo}-pedidos-muertos"
+  topic = google_pubsub_topic.muertos.id
+}
+
+# El agente de Pub/Sub necesita permisos para mover los mensajes descartados:
+# 1. roles/pubsub.publisher sobre el tema de muertos
+resource "google_pubsub_topic_iam_member" "agente_publica_muertos" {
+  topic  = google_pubsub_topic.muertos.name
+  role   = "roles/pubsub.publisher"
+  member = local.agente_pubsub
+}
+
+# 2. roles/pubsub.subscriber sobre la suscripción de la cocina
+resource "google_pubsub_subscription_iam_member" "agente_consume_cocina" {
+  subscription = google_pubsub_subscription.cocina.name
+  role         = "roles/pubsub.subscriber"
+  member       = local.agente_pubsub
+}
+
 # ---------- Suscripción Push ----------
 
 resource "google_pubsub_subscription" "cocina" {
@@ -99,6 +127,11 @@ resource "google_pubsub_subscription" "cocina" {
   retry_policy {
     minimum_backoff = "10s"
     maximum_backoff = "60s"
+  }
+
+  dead_letter_policy {
+    dead_letter_topic     = google_pubsub_topic.muertos.id
+    max_delivery_attempts = 5
   }
 
   push_config {
@@ -113,5 +146,6 @@ resource "google_pubsub_subscription" "cocina" {
   depends_on = [
     google_cloud_run_v2_service_iam_member.invocador_cocina,
     google_service_account_iam_member.pubsub_firma_tokens,
+    google_pubsub_topic_iam_member.agente_publica_muertos,
   ]
 }

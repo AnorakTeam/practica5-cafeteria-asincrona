@@ -31,11 +31,57 @@ def ahora():
     return datetime.now(timezone.utc)
 
 
+@firestore.transactional
+def procesar_pedido_transaccional(transaccion, pedido_ref, cantidades):
+    """Ejecuta de forma atómica e idempotente la validación y descuento en Firestore.
+
+    Lee el pedido y el inventario, verifica si ya fue procesado o si alcanzan
+    las existencias, y aplica las actualizaciones en un solo commit transaccional.
+    """
+    pedido_doc = pedido_ref.get(transaction=transaccion)
+    if not pedido_doc.exists:
+        return "inexistente"
+
+    estado_actual = pedido_doc.get("estado")
+    # Idempotencia: si ya está en estado terminal (listo o rechazado), no repetir descuento
+    if estado_actual in ("listo", "rechazado"):
+        return estado_actual
+
+    # Lectura de todos los productos necesarios en la transacción
+    inventario_col = db().collection("inventario")
+    docs_inventario = {}
+    faltan = []
+
+    for producto, cantidad in cantidades.items():
+        doc_ref = inventario_col.document(producto)
+        doc = doc_ref.get(transaction=transaccion)
+        existencias = (doc.get("existencias") or 0) if doc.exists else 0
+        docs_inventario[producto] = (doc_ref, existencias)
+        if existencias < cantidad:
+            faltan.append(producto)
+
+    # Escritura atómica
+    momento = ahora()
+    if faltan:
+        transaccion.update(
+            pedido_ref,
+            {
+                "estado": "rechazado",
+                "motivo": "Se acabó: " + ", ".join(faltan),
+                "actualizado": momento,
+            },
+        )
+        return "rechazado"
+    else:
+        for producto, cantidad in cantidades.items():
+            doc_ref, existencias_actuales = docs_inventario[producto]
+            transaccion.update(doc_ref, {"existencias": existencias_actuales - cantidad})
+        transaccion.update(pedido_ref, {"estado": "listo", "actualizado": momento})
+        return "listo"
+
+
 @app.post("/")
 def recibir():
-    # Pub/Sub entrega un sobre JSON: {"message": {"data": <base64>, ...},
-    # "subscription": ..., "deliveryAttempt": n}. El último campo solo viene
-    # cuando la suscripción tiene política de mensajes muertos.
     sobre = request.get_json(silent=True)
     try:
         pedido_id = base64.b64decode(sobre["message"]["data"], validate=True).decode()
@@ -49,46 +95,47 @@ def recibir():
     pedido_ref = db().collection("pedidos").document(pedido_id)
     pedido = pedido_ref.get()
     if not pedido.exists:
-        # Se confirma igual: reintentar un pedido que no existe no lo va a crear.
         log.warning("El pedido %s no existe; se descarta el mensaje", pedido_id)
         return "", 204
 
-    pedido_ref.update({"estado": "preparando", "actualizado": ahora()})
+    estado_actual = pedido.get("estado")
+    # Si ya fue terminado previamente por otra entrega o reintento, confirmamos de inmediato
+    if estado_actual in ("listo", "rechazado"):
+        log.info(
+            "Pedido %s ya se encuentra en estado %s; se confirma sin duplicar trabajo",
+            pedido_id,
+            estado_actual,
+        )
+        return "", 204
+
+    # Marcamos en preparación si aún está recibido
+    if estado_actual == "recibido":
+        pedido_ref.update({"estado": "preparando", "actualizado": ahora()})
 
     cantidades = Counter()
     for item in pedido.get("items"):
         cantidades[item["producto"]] += item["cantidad"]
 
+    # Falla determinística para mensajes muertos
     if PLATO_MISTERIOSO in cantidades:
-        raise RuntimeError(f"La cocina no tiene receta para el plato misterioso (pedido {pedido_id})")
+        raise RuntimeError(
+            f"La cocina no tiene receta para el plato misterioso (pedido {pedido_id})"
+        )
 
+    # Tiempo de preparación simulado
     time.sleep(TIEMPO_PREPARACION)
 
-    inventario = db().collection("inventario")
-    faltan = [
-        producto for producto, cantidad in cantidades.items()
-        if (inventario.document(producto).get().get("existencias") or 0) < cantidad
-    ]
-    if faltan:
-        pedido_ref.update({
-            "estado": "rechazado",
-            "motivo": "Se acabó: " + ", ".join(faltan),
-            "actualizado": ahora(),
-        })
-        log.info("Pedido %s rechazado, no alcanza: %s", pedido_id, faltan)
-    else:
-        # Ojo: si Pub/Sub entrega este mismo pedido otra vez, este descuento se repite.
-        lote = db().batch()
-        for producto, cantidad in cantidades.items():
-            lote.update(inventario.document(producto), {"existencias": firestore.Increment(-cantidad)})
-        lote.update(pedido_ref, {"estado": "listo", "actualizado": ahora()})
-        lote.commit()
-        log.info("Pedido %s listo", pedido_id)
+    # Ejecución atómica mediante transacción de Firestore
+    transaccion = db().transaction()
+    resultado = procesar_pedido_transaccional(transaccion, pedido_ref, cantidades)
+    log.info("Pedido %s resuelto en transacción como: %s", pedido_id, resultado)
 
-    # Simula que la cocina se cae justo después de terminar y antes de confirmar.
-    # Pub/Sub no recibe el 2xx y vuelve a entregar el mismo pedido.
+    # Simulación de falla (at-least-once) si está configurada
     if random.random() < PROBABILIDAD_FALLO:
-        log.warning("Falla simulada en el pedido %s: el trabajo quedó hecho pero no se confirma", pedido_id)
+        log.warning(
+            "Falla simulada en el pedido %s: el trabajo quedó hecho pero no se confirma",
+            pedido_id,
+        )
         return "falla simulada", 500
 
     return "", 204
