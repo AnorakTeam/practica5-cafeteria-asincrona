@@ -191,11 +191,13 @@ El plato misterioso falla siempre, y sin un tema de mensajes muertos Pub/Sub lo 
 
 | Nombre | Código | Usuario de GitHub |
 |---|---|---|
-| | | |
+| José Pérez | 1152375 | @AnorakTeam |
+| Yoset Piedrahita | 1152390 | @YosetPiedrahita-svg |
+| Nelson Conde | 1152391 | @NelsonConde |
 
 ## URL de la cafetería
 
-Frontend:
+Frontend: https://grupo3-frontend-7ur5qm2g3a-uc.a.run.app/
 
 ## Diagrama propio
 
