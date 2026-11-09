@@ -243,7 +243,21 @@ Frontend:
 
 ### Fase 3: La cocina privada
 
-*(Pendiente)*
+- Prueba de seguridad con `curl -i -X POST $C/` sobre la URL de la cocina privada, obteniendo `HTTP/2 403 Forbidden`:
+
+![Rechazo 403 al invocar cocina directamente](evidence/fase3-curl.png)
+
+- Suscripción push (`grupo3-cocina`) creada en Pub/Sub apuntando al endpoint de la cocina con token OIDC:
+
+![Suscripción Pub/Sub de cocina](evidence/fase3-sub.png)
+
+- Pedido exitoso avanzando automáticamente hasta el estado `listo`:
+
+![Pedido en listo](evidence/fase3-listo.png)
+
+- Registro de Cloud Run de la cocina confirmando la recepción y preparación exitosa del pedido:
+
+![Logs de cocina listo](evidence/fase3-run-log.png)
 
 ### Fase 4: Lo asíncrono, visto
 
