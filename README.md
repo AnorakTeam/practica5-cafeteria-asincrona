@@ -223,13 +223,23 @@ Frontend:
 
 ![Pedido en recibido](evidence/fase1-page.png)
 
-- Advertencia (`WARNING`) en los registros de Cloud Run del backend indicando que la variable `TEMA` no está configurada:
+- Advertencia (`WARNING`) en los registros de Cloud Run del backend:
 
 ![Advertencia en logs del backend](evidence/fase1-log.png)
 
 ### Fase 2: El tema
 
-*(Pendiente)*
+- Tema de Pub/Sub creado (`grupo3-pedidos`) sin suscripciones asociadas aún en la consola:
+
+![Tema de Pub/Sub sin suscripciones](evidence/fase2-subs.png)
+
+- Nuevo pedido realizado desde el frontend, el cual continúa en estado `recibido` de forma indefinida:
+
+![Pedido en recibido tras publicar al tema](evidence/fase2-page.png)
+
+- Registro de Cloud Run del backend (`INFO:backend:Pedido ... publicado`) confirmando que el backend ya publica al tema Pub/Sub:
+
+![Logs del backend publicando pedido](evidence/fase2-log.png)
 
 ### Fase 3: La cocina privada
 
