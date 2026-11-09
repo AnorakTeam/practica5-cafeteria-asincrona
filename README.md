@@ -283,7 +283,13 @@ Frontend:
 
 ### Fase 5: Una falla a propósito
 
-*(Pendiente)*
+- Inventario descontado de más debido a la falla simulada (`PROBABILIDAD_FALLO = 0.5`): con 2 tandas de 4 pedidos (8 pedidos de 1 tinto en total sobre 20 iniciales), las existencias cayeron a 2 tintos en lugar de 12 (descontando 18 tintos en total por reintentos de Pub/Sub):
+
+![Inventario descontado de más en fase 5](evidence/fase5-tintos.png)
+
+- Registros de Cloud Run (`grupo3-cocina`) evidenciando la falla simulada, la respuesta no confirmada y la reentrega de un mismo pedido por parte de Pub/Sub:
+
+![Logs de la cocina con reintentos](evidence/fase5-run.png)
 
 ### Fase 6: Reto de la semana (Idempotencia y mensajes muertos)
 
