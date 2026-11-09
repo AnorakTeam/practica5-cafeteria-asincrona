@@ -261,7 +261,25 @@ Frontend:
 
 ### Fase 4: Lo asíncrono, visto
 
-*(Pendiente)*
+- Ejecución de la ráfaga de 60 pedidos concurrentes respondiendo `201 Created` en pocos segundos:
+
+![Salida ráfaga de 60 pedidos](evidence/fase4-curl.png)
+
+- Pantalla de la cafetería con pedidos distribuidos en las columnas procesándose en paralelo y en desorden:
+
+![Pantalla con pedidos concurrentes](evidence/fase4-rafaga-1.png)
+
+- Inventario final mostrando condición de carrera: existencias de tinto terminan en número negativo debido a la falta de operaciones atómicas entre la verificación y el descuento:
+
+![Inventario en negativo tras la ráfaga](evidence/fase4-rafaga-con-negativo.png)
+
+- Métricas de Pub/Sub (`grupo3-cocina`) mostrando la acumulación de mensajes no confirmados (cola) y su procesamiento:
+
+![Métricas de Pub/Sub](evidence/fase4-pub-sub.png)
+
+- Métricas de Cloud Run (`grupo3-cocina`) mostrando el autoescalado de instancias respondiendo a la carga:
+
+![Escalado de instancias en Cloud Run](evidence/fase4-run.png)
 
 ### Fase 5: Una falla a propósito
 
